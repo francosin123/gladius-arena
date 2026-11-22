@@ -210,7 +210,8 @@ const HP_MAX = 100;
    RENDERER / SCENE
    ===================================================================== */
 const renderer = new THREE.WebGLRenderer({ antialias: !LOW, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(devicePixelRatio, LOW ? 1.25 : 2));
+let PR = Math.min(devicePixelRatio, LOW ? 1.25 : 1.75);
+renderer.setPixelRatio(PR);
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -906,6 +907,7 @@ class Fighter {
     for (const m of this.mats) m.dispose();
     scene.remove(this.root);
     if (this.whoosh) this.whoosh.stop();
+    if (this.trail) this.trail.dispose();
   }
   /* ---------- visual model ---------- */
   buildVisual() {
@@ -970,12 +972,12 @@ class Fighter {
     }
     // arms
     const limb = (k, len, r0, r1) => { const gg = G(k); const r = (r0 + r1) / 2; add(gg, new THREE.CapsuleGeometry(r, Math.max(.01, len - r * 1.4), 5, 12), skin, 0, 0, 0, 0, 0, 0, 1, 1, 1); return gg; };
-    g = limb('uaR', .3, .057, .048); for (let i = 0; i < 5; i++) add(g, cyl(.064, .062, .045, 14), steel, 0, .11 - i * .05, 0);
-    g = limb('faR', .27, .048, .04); for (let i = 0; i < 5; i++) add(g, cyl(.056, .052, .045, 14), steel, 0, .1 - i * .048, 0);
+    g = limb('uaR', .3, .066, .055); for (let i = 0; i < 5; i++) add(g, cyl(.072, .07, .045, 14), steel, 0, .11 - i * .05, 0);
+    g = limb('faR', .27, .055, .045); for (let i = 0; i < 5; i++) add(g, cyl(.064, .058, .045, 14), steel, 0, .1 - i * .048, 0);
     add(g, sph(.045, 10, 8), skin, 0, -.15, .005, 0, 0, 0, 1, 1.15, 1.25);
     this.buildWeapon(g, steel, bronze, dark, gold);
-    g = limb('uaL', .3, .057, .048); add(g, cyl(.06, .058, .06, 12), leather, 0, -.06, 0);
-    g = limb('faL', .27, .048, .04); add(g, cyl(.054, .05, .16, 12), leather, 0, -.02, 0); add(g, sph(.045, 10, 8), skin, 0, -.15, 0);
+    g = limb('uaL', .3, .066, .055); add(g, cyl(.06, .058, .06, 12), leather, 0, -.06, 0);
+    g = limb('faL', .27, .055, .045); add(g, cyl(.054, .05, .16, 12), leather, 0, -.02, 0); add(g, sph(.045, 10, 8), skin, 0, -.15, 0);
     this.buildShield(g, bronze, gold);
     // legs
     for (const s of ['R', 'L']) {
@@ -1183,7 +1185,7 @@ class Fighter {
     const F = this._gf || (this._gf = V3()); F.set(fx, fy, fz);
     body.applyForce(F, r);
   }
-  knockdown(t) { if (this.dead) return; this.downT = Math.max(this.downT, t); this.getup = 0; this.blockOn = 0; }
+  knockdown(t) { if (this.dead) return; if (this.downT <= 0) { const p = this.b.pelvis.position; FX.dust(p.x, .05, p.z, 14); } this.downT = Math.max(this.downT, t); this.getup = 0; this.blockOn = 0; }
   respawn(x, z, yaw) { this.dead = false; this.downT = 0; this.getup = 1; this.stagger = 0; this.hitCd = {}; this.placeAt(x, z, yaw); }
   tipWorld(out) { const fa = this.b.faR; const p = fa.pointToWorldFrame(V3(0, this.W.tip, 0)); return out.set(p.x, p.y, p.z); }
   /* ---------- network snapshots ---------- */
@@ -1261,11 +1263,40 @@ class Fighter {
     const tip = this._tip || (this._tip = new THREE.Vector3()); this.tipWorld(tip);
     const sp = tip.distanceTo(this.tipPrev) / Math.max(dt, 1e-3); this.tipPrev.copy(tip);
     this.tipSpeed = lerp(this.tipSpeed, Math.min(sp, 30), .35);
+    if (!this.trail) this.trail = new Trail();
+    const base = this._tb || (this._tb = new THREE.Vector3()); const fa = this.b.faR; const bp = fa.pointToWorldFrame(V3(0, this.W.tip * (this.C.weapon === 'hasta' ? .82 : .45), 0)); base.set(bp.x, bp.y, bp.z);
+    this.trail.update(base, tip, this.tipSpeed);
     Snd.whooshFor(this, this.tipSpeed, tip);
   }
   get chestPos() { return this.b.chest.position; }
   isDown() { return this.sim ? (this.downT > 0 || this.getup < 1) : !!(this.flags & 4); }
   parryWindow() { return this.sim ? (this.blockOn && simTime - this.blockT < .24) : !!(this.flags & 2); }
+}
+const TRAIL_N = 14;
+const trailMat = new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+  vertexShader: `attribute float a; varying float vA; varying float vS; attribute float sd; void main(){ vA=a; vS=sd; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }`,
+  fragmentShader: `varying float vA; varying float vS; void main(){ float e = smoothstep(0.,1.,vS); gl_FragColor=vec4(vec3(1.,.93,.8)*1.4, vA*e*.55); }`
+});
+class Trail {
+  constructor() {
+    this.p = new Float32Array(TRAIL_N * 2 * 3); this.a = new Float32Array(TRAIL_N * 2); const sd = new Float32Array(TRAIL_N * 2);
+    const idx = []; for (let i = 0; i < TRAIL_N - 1; i++) { const k = i * 2; idx.push(k, k + 1, k + 2, k + 1, k + 3, k + 2); }
+    for (let i = 0; i < TRAIL_N; i++) { sd[i * 2] = 0; sd[i * 2 + 1] = 1; }
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(this.p, 3)); g.setAttribute('a', new THREE.BufferAttribute(this.a, 1)); g.setAttribute('sd', new THREE.BufferAttribute(sd, 1)); g.setIndex(idx);
+    this.mesh = new THREE.Mesh(g, trailMat); this.mesh.frustumCulled = false; this.mesh.renderOrder = 5; scene.add(this.mesh); this.init = false;
+  }
+  update(base, tip, speed) {
+    const p = this.p, a = this.a;
+    if (!this.init) { for (let i = 0; i < TRAIL_N; i++) { p.set([base.x, base.y, base.z, tip.x, tip.y, tip.z], i * 6); } this.init = true; }
+    p.copyWithin(0, 6); a.copyWithin(0, 2);
+    const o = (TRAIL_N - 1) * 6; p[o] = base.x; p[o + 1] = base.y; p[o + 2] = base.z; p[o + 3] = tip.x; p[o + 4] = tip.y; p[o + 5] = tip.z;
+    const k = clamp((speed - 5.5) / 7, 0, 1);
+    a[(TRAIL_N - 1) * 2] = k; a[(TRAIL_N - 1) * 2 + 1] = k;
+    for (let i = 0; i < TRAIL_N; i++) { const f = i / (TRAIL_N - 1); a[i * 2] *= f > .99 ? 1 : .86; a[i * 2 + 1] = a[i * 2]; }
+    const g = this.mesh.geometry; g.attributes.position.needsUpdate = true; g.attributes.a.needsUpdate = true;
+  }
+  dispose() { scene.remove(this.mesh); this.mesh.geometry.dispose(); }
 }
 const INTERP_MS = 110;
 function makeTag(name, col) {
@@ -1987,7 +2018,20 @@ const FIXED = 1 / 120;
 let acc = 0, last = performance.now(), poseT = 0, frameN = 0;
 const perf = { fps: 60, ft: 16 };
 let lastTick = 0;
-function frame() { requestAnimationFrame(frame); tick(); }
+// adaptive resolution: drop the pixel ratio if frames run long
+const adapt = { t: 0, slow: 0, last: 0 };
+function frame() {
+  requestAnimationFrame(frame);
+  const now = performance.now(), fdt = now - (adapt.last || now); adapt.last = now;
+  if (fdt > 0 && fdt < 200 && G.playing) {
+    adapt.t += fdt; if (fdt > 22) adapt.slow += fdt;
+    if (adapt.t > 2500) {
+      if (adapt.slow / adapt.t > .5 && PR > .8) { PR = Math.max(.75, PR - .25); renderer.setPixelRatio(PR); if (composer) composer.setPixelRatio(PR); onResize(); }
+      adapt.t = adapt.slow = 0;
+    }
+  }
+  tick();
+}
 // keep simulating (and sending poses) when rAF is paused, e.g. a hidden pane or background tab
 setInterval(() => { if (performance.now() - lastTick > 150) tick(); }, 33);
 function tick() {
