@@ -1,6 +1,6 @@
 # Gladius Arena
 
-Physics-driven gladiator duels in a Roman colosseum, right in the browser.
+Physics-driven gladiator duels in a caged stone arena, right in the browser.
 
 **Play:** https://francosin123.github.io/gladius-arena/
 
@@ -23,6 +23,6 @@ Mouse steers the weapon · LMB thrust/reach · RMB shield · WASD move · Shift 
 - Each client simulates its own gladiator and streams pose snapshots at 30 Hz. Remote fighters are interpolated about 110 ms behind and become kinematic bodies, so your blade really collides with them.
 - One peer per room is the **host** (the earliest joiner). The host decides HP, kills, respawns and rounds. Attackers report hits to the host, which applies them and broadcasts the result. If the host leaves, the next peer takes over.
 - The protocol is version-tagged (in the app id and in every message), so clients on different versions ignore each other.
-- All art and sound is generated in code: textures are drawn on canvases and audio is synthesised with WebAudio.
+- The arena is the free **Arena** pack from [devassets.com](http://devassets.com/) (see their [usage guidelines](http://devassets.com/guidelines/)). It was converted from FBX/Unity into one `arena/arena.glb` (4 MB), with resized textures and the 607 seats baked as an instanced chair plus seat positions. Gladiators, effects and sounds are generated in code.
 
 `test.html` opens two bot-driven clients side by side in iframes for multiplayer testing (serve the folder with `python3 -m http.server`).
